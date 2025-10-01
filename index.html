@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Speech Translator - EN ↔ FR</title>
+        <link rel="stylesheet" href="/src/style.css" />
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <h1>🎙️ Speech Translator</h1>
+                <p>Record audio and translate between English and French</p>
+            </header>
+
+            <main>
+                <!-- Status Messages -->
+                <div id="status" class="status-message"></div>
+
+                <!-- Control Panel -->
+                <section class="control-panel">
+                    <button id="recordBtn" class="btn btn-record" aria-label="Start recording">
+                        <span class="icon">🎤</span>
+                        <span class="text">Record</span>
+                    </button>
+                    <button id="stopBtn" class="btn btn-stop" disabled aria-label="Stop recording">
+                        <span class="icon">⏹️</span>
+                        <span class="text">Stop</span>
+                    </button>
+                    <div id="recordingIndicator" class="recording-indicator hidden">
+                        <span class="pulse"></span>
+                        <span id="timer">00:00</span>
+                    </div>
+                </section>
+
+                <!-- Results Display -->
+                <section class="results-section hidden" id="resultsSection">
+                    <div class="result-card">
+                        <div class="result-header">
+                            <h3>Original</h3>
+                            <span id="detectedLang" class="language-badge"></span>
+                        </div>
+                        <div id="transcription" class="result-text"></div>
+                    </div>
+
+                    <div class="translation-arrow">↓</div>
+
+                    <div class="result-card">
+                        <div class="result-header">
+                            <h3>Translation</h3>
+                            <span id="targetLang" class="language-badge"></span>
+                        </div>
+                        <div id="translation" class="result-text"></div>
+                    </div>
+                </section>
+
+                <!-- Loading Indicator -->
+                <div id="loadingIndicator" class="loading-indicator hidden">
+                    <div class="spinner"></div>
+                    <p id="loadingText">Processing...</p>
+                </div>
+            </main>
+
+            <footer>
+                <p>All processing happens in your browser. No data is sent to external servers.</p>
+            </footer>
+        </div>
+
+        <script type="module" src="/src/main.js"></script>
+    </body>
+</html>
