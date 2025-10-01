@@ -41,7 +41,69 @@ const elements = {
     targetLang: document.getElementById("targetLang"),
     loadingIndicator: document.getElementById("loadingIndicator"),
     loadingText: document.getElementById("loadingText"),
+    speakBtn: document.getElementById("speakBtn"),
 };
+
+// Text-to-Speech function
+function speakTranslation() {
+    const translatedText = elements.translation.textContent;
+    const targetLang = elements.targetLang.textContent.toLowerCase();
+    
+    if (!translatedText) {
+        showStatus("No translation to speak!", "error");
+        return;
+    }
+    
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    // Wait for voices to load, then speak
+    setTimeout(() => {
+        // Get available voices
+        const voices = window.speechSynthesis.getVoices();
+        console.log("Available voices:", voices.map(v => `${v.name} (${v.lang})`));
+        
+        // Create utterance
+        const utterance = new SpeechSynthesisUtterance(translatedText);
+        
+        // Set language based on target
+        const desiredLang = targetLang === 'french' ? 'fr' : 'en';
+        utterance.lang = targetLang === 'french' ? 'fr-FR' : 'en-US';
+        
+        // Try to find a voice for the target language
+        const matchingVoice = voices.find(voice => voice.lang.startsWith(desiredLang));
+        if (matchingVoice) {
+            utterance.voice = matchingVoice;
+            console.log("Using voice:", matchingVoice.name, matchingVoice.lang);
+        } else {
+            console.warn(`No ${desiredLang} voice found, using default`);
+            // Just use default voice - will still speak, even if accent is wrong
+        }
+        
+        utterance.rate = 0.9; // Slightly slower for clarity
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0; // Max volume
+        
+        // Add event handlers for debugging
+        utterance.onstart = () => {
+            console.log("Speech started");
+            showStatus("🔊 Speaking...", "info");
+        };
+        utterance.onend = () => {
+            console.log("Speech ended");
+            showStatus("Translation complete!", "success");
+        };
+        utterance.onerror = (event) => {
+            console.error("Speech error:", event.error);
+            showStatus("Speech error: " + event.error, "error");
+        };
+        
+        // Speak
+        window.speechSynthesis.speak(utterance);
+        
+        console.log("Speaking:", translatedText, "in language:", utterance.lang);
+    }, 100);
+}
 
 // Initialize Application
 async function initializeApp() {
@@ -53,6 +115,7 @@ async function initializeApp() {
     // Set up event listeners
     elements.recordBtn.addEventListener("click", startRecording);
     elements.stopBtn.addEventListener("click", stopRecording);
+    elements.speakBtn.addEventListener("click", speakTranslation);
 
     showStatus('Ready! Click "Record" to start.', "success");
 }
@@ -113,7 +176,8 @@ async function startRecording() {
         elements.recordBtn.disabled = true;
         elements.stopBtn.disabled = false;
         elements.recordingIndicator.classList.remove("hidden");
-        elements.resultsSection.classList.add("hidden");
+        // Keep results visible so user can read the translation while recording
+        // elements.resultsSection.classList.add("hidden");
         showStatus("Recording... Speak clearly in English or French.", "info");
 
         // Start timer
@@ -150,7 +214,7 @@ async function loadWhisperModel() {
         console.log("Starting to load Whisper model...");
         state.whisperPipeline = await pipeline(
             "automatic-speech-recognition",
-            "Xenova/whisper-tiny",
+            "Xenova/whisper-base",
             {
                 progress_callback: (progress) => {
                     console.log("Model loading progress:", progress);
@@ -172,19 +236,48 @@ async function loadWhisperModel() {
     }
 }
 
-// Load Translation Model
-async function loadTranslationModel(sourceLang, targetLang) {
-    // Use NLLB model for translation
-    if (state.translatorPipeline) return state.translatorPipeline;
+// Load Translation Model - using lighter Opus-MT models
+async function loadTranslationModel(sourceLanguageCode, targetLanguageCode) {
+    // Determine which model to use based on direction
+    let modelName;
+    const cacheKey = `${sourceLanguageCode}_${targetLanguageCode}`;
+    
+    if (sourceLanguageCode === "eng_Latn" && targetLanguageCode === "fra_Latn") {
+        modelName = "Xenova/opus-mt-en-fr";
+    } else if (sourceLanguageCode === "fra_Latn" && targetLanguageCode === "eng_Latn") {
+        modelName = "Xenova/opus-mt-fr-en";
+    } else {
+        throw new Error("Unsupported translation direction");
+    }
 
-    showLoading("Loading translation model (first time only)...");
+    // Check if we already have this model loaded
+    if (state.translatorPipeline && state.translatorPipeline._cacheKey === cacheKey) {
+        return state.translatorPipeline;
+    }
+
+    showLoading(`Loading ${sourceLanguageCode.startsWith('eng') ? 'EN→FR' : 'FR→EN'} translation model...`);
 
     try {
-        state.translatorPipeline = await pipeline("translation", "Xenova/nllb-200-distilled-600M");
-        return state.translatorPipeline;
+        console.log(`Loading translation model: ${modelName}`);
+        const pipeline_inst = await pipeline("translation", modelName, {
+            progress_callback: (progress) => {
+                console.log("Translation model progress:", progress);
+                if (progress.status === "downloading") {
+                    const percent = Math.round(progress.progress || 0);
+                    showLoading(`Downloading translation model: ${percent}%`);
+                }
+            }
+        });
+        
+        // Cache the model with its direction
+        pipeline_inst._cacheKey = cacheKey;
+        state.translatorPipeline = pipeline_inst;
+        
+        console.log("Translation model loaded successfully");
+        return pipeline_inst;
     } catch (error) {
         console.error("Error loading translation model:", error);
-        throw new Error("Failed to load translation model");
+        throw new Error(`Failed to load translation model: ${error.message}`);
     }
 }
 
@@ -221,29 +314,55 @@ async function processAudio(audioBlob) {
         // Convert audio to format expected by Whisper
         const audioData = await audioBufferToArray(audioBlob);
 
-        // Transcribe audio
+        // Get selected language from dropdown
+        const directionSelect = document.getElementById('direction');
+        const direction = directionSelect.value; // "en-fr" or "fr-en"
+        const sourceLanguage = direction.startsWith('en') ? 'en' : 'fr';
+        
+        // Transcribe audio with the selected language
         const transcriptionResult = await whisper(audioData, {
-            return_timestamps: false,
-            language: null, // Auto-detect language
+            return_timestamps: true,
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            language: sourceLanguage, // Use selected language for better accuracy
+            task: "transcribe",
         });
 
         const transcribedText = transcriptionResult.text.trim();
-        let detectedLanguage = transcriptionResult.language || "en"; // Default to English if unknown
+        
+        console.log("Full transcription result:", transcriptionResult);
+        console.log("Transcribed text:", transcribedText);
+        console.log("Text length:", transcribedText.length);
 
-        console.log("Transcription:", transcribedText);
-        console.log("Detected language:", detectedLanguage);
-        console.log("Full result:", transcriptionResult);
-
-        if (!transcribedText) {
-            throw new Error("No speech detected. Please try again.");
+        if (!transcribedText || transcribedText.length < 2) {
+            showStatus("No clear speech detected. Please speak louder and longer (3-10 seconds).", "error");
+            hideLoading();
+            return;
         }
 
-        // Simple language detection fallback: check for French words in transcription
-        if (detectedLanguage === "unknown" || !detectedLanguage) {
-            const frenchWords = /\b(bonjour|merci|oui|non|je|tu|il|est|dans|pour|avec|sur)\b/i;
-            detectedLanguage = frenchWords.test(transcribedText) ? "fr" : "en";
-            console.log("Fallback language detection:", detectedLanguage);
+        // Check for Whisper hallucinations (repeated words/phrases)
+        const words = transcribedText.split(/\s+/);
+        if (words.length > 20) {
+            // Count most repeated word
+            const wordCounts = {};
+            words.forEach(word => {
+                const lower = word.toLowerCase();
+                wordCounts[lower] = (wordCounts[lower] || 0) + 1;
+            });
+            const maxRepeats = Math.max(...Object.values(wordCounts));
+            const repeatRatio = maxRepeats / words.length;
+            
+            if (repeatRatio > 0.3 || maxRepeats > 50) {
+                showStatus("Audio quality too low. Please speak MUCH louder and closer to microphone.", "error");
+                console.warn("Hallucination detected:", { maxRepeats, repeatRatio, transcribedText: transcribedText.substring(0, 200) });
+                hideLoading();
+                return;
+            }
         }
+
+        const detectedLanguage = sourceLanguage;
+        console.log("Selected direction:", direction);
+        console.log("Source language:", detectedLanguage);
 
         // Display transcription
         elements.transcription.textContent = transcribedText;
@@ -276,10 +395,8 @@ async function processAudio(audioBlob) {
         showLoading("Translating...");
         const translator = await loadTranslationModel(sourceLanguageCode, targetLanguageCode);
 
-        const translationResult = await translator(transcribedText, {
-            src_lang: sourceLanguageCode,
-            tgt_lang: targetLanguageCode,
-        });
+        // Opus-MT models don't need src_lang/tgt_lang parameters
+        const translationResult = await translator(transcribedText);
 
         const translatedText = translationResult[0].translation_text;
         console.log("Translation:", translatedText);
